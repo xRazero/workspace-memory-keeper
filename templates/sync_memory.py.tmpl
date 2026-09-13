@@ -1,0 +1,346 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+sync_memory.py —— 项目内「本地为主」多文件知识库同步器（通用薄启动器）
+
+跨项目统一记忆管理机制的一部分（见 workspace-memory-keeper 技能
+references/memory-rules.md §6）。本脚本不绑定任何项目：要同步的文件清单完全来自
+同目录 sync_state.json 的 `files` 键，因此复制到任意项目即可使用，无需改代码。
+
+同步模型：
+  源真相 : 本地 docs/*.md（agent 唯一可写处）
+  副本   : 资料库在线文档（每个文件一个节点，映射存于 sync_state.json）
+  通道   : WorkBuddy 内置「资料库(Library)」技能的 create_doc.py
+           （重新发布整篇；资料库编辑 API 不返回 blockId，无法整篇原地覆盖）
+
+三大约束对策：
+  1) 资料库 edit API 需 blockId、却读不到 → 采用「重新发布」模型：脏了就重建新节点，
+     返回新 nodeId 自动写回 sync_state.json（含派生 URL）。旧节点变孤儿（UI 手动清理）。
+  2) token 须宿主经 connect_open_platform 换票 → 脚本不自取，必须由 agent 经 --token-stdin 注入。
+     故同步是「agent 在编辑后驱动」，不是无人值守 cron。
+  3) 离线 → 标记 pending_offline，本地保持权威，零数据丢失；重连后下次 push 检测 hash 变化自动补推。
+
+【关键：MEMORY.md 不存节点 URL】
+  节点映射（path→node_id/url/hash/status）全部存在 sync_state.json（机器可读、零注入预算）。
+  MEMORY.md 只留一行稳定指针「资料库节点映射见 .workbuddy/memory/sync_state.json」。
+
+子命令：
+  init   --path P --node-id X [--url U] [--title T]
+                           登记某文件映射为「已同步」（首次发布后调用）
+  check  [--path P]        （离线安全）逐文件比对本地哈希与状态，打印 synced/dirty/pending_offline
+  push   [--path P] --token-stdin [--title T] [--force]
+                           脏了且在线则重新发布；无 token/网络失败→pending_offline；缺 path=全部
+  list                    列出全部文件映射（path/status/url）
+
+退出码：0=正常（含离线挂起/无变化跳过）；2=参数/致命错误。
+stdout：每行一条 JSON 状态，便于 agent 解析；stderr：人类可读摘要。
+
+依赖：WorkBuddy 内置「资料库(Library)」技能。其 install 目录通过环境变量
+LIBRARY_SKILL_DIR 指定；未设置时按常见安装路径自动探测（Windows/macOS/Linux）。
+"""
+import argparse
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+MEM_DIR = Path(__file__).resolve().parent            # .workbuddy/memory
+PROJECT_ROOT = MEM_DIR.parent.parent                 # 项目根
+STATE = MEM_DIR / "sync_state.json"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _url(node_id: str) -> str:
+    return f"https://www.workbuddy.cn/space/d/{node_id}"
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _resolve_path(p: str) -> Path:
+    pp = Path(p)
+    return pp if pp.is_absolute() else (PROJECT_ROOT / p)
+
+
+def _find_library_skill_dir() -> Path:
+    """定位 WorkBuddy 内置「资料库(Library)」技能目录。
+
+    1) 优先读 LIBRARY_SKILL_DIR 环境变量；
+    2) 否则按各平台常见安装路径探测；
+    3) 都失败则给出可读错误，提示用户设置环境变量。
+    """
+    env = os.environ.get("LIBRARY_SKILL_DIR")
+    if env:
+        return Path(env)
+    candidates = []
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        candidates.append(
+            Path(local) / "Programs" / "WorkBuddy" / "resources" / "app.asar.unpacked"
+            / "resources" / "plugins" / "workbuddy-builtin" / "skills" / "library"
+        )
+    candidates.append(
+        Path.home() / "Applications" / "WorkBuddy.app" / "Contents" / "Resources"
+        / "app.asar.unpacked" / "resources" / "plugins" / "workbuddy-builtin"
+        / "skills" / "library"
+    )
+    candidates.append(
+        Path("/opt/WorkBuddy/resources/app.asar.unpacked/resources/plugins"
+             "/workbuddy-builtin/skills/library")
+    )
+    candidates.append(
+        Path.home() / ".workbuddy" / "plugins" / "cache" / "workbuddy-builtin"
+        / "library"
+    )
+    for c in candidates:
+        if c.exists():
+            return c
+    raise FileNotFoundError(
+        "找不到 WorkBuddy 资料库(Library)技能目录。请设置环境变量 LIBRARY_SKILL_DIR "
+        "指向 .../skills/library 目录（即包含 doc/create_doc.py 的那一层），"
+        "再运行 push。check/list/init 不需要该目录。"
+    )
+
+
+def _load_state() -> dict:
+    if STATE.exists():
+        try:
+            return json.loads(STATE.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+    return {}
+
+
+def _save_state(state: dict) -> None:
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    STATE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _emit(status: str, **extra) -> None:
+    print(json.dumps({"status": status, **extra}, ensure_ascii=False))
+    label = {
+        "synced": "OK  synced (local == library)",
+        "synced_partial": "WARN  published but content may be incomplete (open to verify)",
+        "dirty": "DIRTY  local changed, pending push",
+        "pending_offline": "OFFLINE  no token/network: suspended, local authoritative",
+        "no_change": "SKIP  no change, push skipped",
+        "error": "ERROR",
+    }.get(status, status)
+    print(label, file=sys.stderr)
+
+
+def _mark_pending(entry: dict, state: dict, reason: str, path: str = None) -> None:
+    entry.update({
+        "status": "pending_offline",
+        "pending_since": _now_iso(),
+        "pending_reason": reason,
+    })
+    _save_state(state)
+    _emit("pending_offline", path=path, reason=reason)
+
+
+def _paths(args: argparse.Namespace):
+    state = _load_state()
+    files = state.get("files", {})
+    if args.path:
+        return [args.path]
+    return list(files.keys())
+
+
+def _entry_path(path: str, args: argparse.Namespace) -> Path:
+    if getattr(args, "path", None):
+        return _resolve_path(args.path)
+    return _resolve_path(path)
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    state = _load_state()
+    files = state.setdefault("files", {})
+    path = args.path
+    if not _resolve_path(path).exists():
+        _emit("error", path=path, reason="local source missing")
+        return 2
+    entry = files.setdefault(path, {})
+    entry["title"] = args.title or Path(path).name
+    entry["node_id"] = args.node_id
+    entry["url"] = args.url or _url(args.node_id)
+    entry["last_synced_hash"] = _sha256(_resolve_path(path))
+    entry["status"] = "synced"
+    entry["synced_at"] = _now_iso()
+    entry.setdefault("previous_node_id", args.node_id)
+    state.setdefault("namespace", "")
+    _save_state(state)
+    _emit("synced", path=path, node_id=args.node_id, url=entry["url"])
+    return 0
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    state = _load_state()
+    files = state.get("files", {})
+    for path in _paths(args):
+        entry = files.get(path, {})
+        rp = _resolve_path(path)
+        if not rp.exists():
+            _emit("error", path=path, reason="local source missing")
+            continue
+        lh = _sha256(rp)
+        st = entry.get("status")
+        if st == "pending_offline":
+            _emit("pending_offline", path=path,
+                  since=entry.get("pending_since"),
+                  local_hash=lh[:12])
+        elif entry.get("last_synced_hash") == lh and st == "synced":
+            _emit("synced", path=path, node_id=entry.get("node_id"),
+                  synced_at=entry.get("synced_at"))
+        else:
+            _emit("dirty", path=path, node_id=entry.get("node_id"),
+                  last_synced_hash=(entry.get("last_synced_hash") or "")[:12],
+                  local_hash=lh[:12])
+    return 0
+
+
+def cmd_push(args: argparse.Namespace) -> int:
+    token = sys.stdin.read().strip() if args.token_stdin else ""
+    state = _load_state()
+    files = state.setdefault("files", {})
+    for path in _paths(args):
+        rp = _resolve_path(path)
+        if not rp.exists():
+            _emit("error", path=path, reason="local source missing")
+            continue
+        entry = files.setdefault(path, {})
+        lh = _sha256(rp)
+        # 无变化且已同步 → 跳过（幂等，省 API；不重建节点，保留现有发布）
+        if not args.force and entry.get("status") == "synced" \
+                and entry.get("last_synced_hash") == lh:
+            _emit("no_change", path=path, node_id=entry.get("node_id"))
+            continue
+        if not token:
+            _mark_pending(entry, state,
+                          "no token (connect_open_platform not exchanged or offline)",
+                          path=path)
+            continue
+        try:
+            lib_dir = _find_library_skill_dir()
+        except FileNotFoundError as exc:
+            _mark_pending(entry, state, str(exc), path=path)
+            continue
+        create_doc = lib_dir / "doc" / "create_doc.py"
+        if not create_doc.exists():
+            _mark_pending(entry, state,
+                          f"create_doc.py not found under {lib_dir}", path=path)
+            continue
+        title = args.title or entry.get("title") or Path(path).name
+        env = {**os.environ,
+               "LIBRARY_SKILL_DIR": str(lib_dir),
+               "CODEBUDDY_SKILL_DIR": str(lib_dir)}
+        try:
+            proc = subprocess.run(
+                [sys.executable, str(create_doc),
+                 "--token-stdin", "--title", title,
+                 "--content-file", str(rp)],
+                input=token, capture_output=True, text=True, timeout=90,
+                env=env,
+            )
+        except Exception as e:  # noqa: BLE001
+            _mark_pending(entry, state, f"create_doc invoke error: {e}", path=path)
+            continue
+        out = proc.stdout or ""
+        if not out.strip() or out.lstrip().startswith("{"):
+            _mark_pending(entry, state,
+                          f"create_doc failed: {out.strip() or 'empty stdout'}",
+                          path=path)
+            continue
+        new_node = None
+        failed = fatal = 0
+        for line in out.splitlines():
+            if line.startswith("KS_DOC_CREATE\t"):
+                parts = line.split("\t")
+                new_node = parts[1] if len(parts) > 1 else None
+                try:
+                    failed = int(parts[4]) if len(parts) > 4 else 0
+                    fatal = int(parts[5]) if len(parts) > 5 else 0
+                except ValueError:
+                    pass
+                break
+        if not new_node:
+            _mark_pending(entry, state, "create_doc returned no nodeId", path=path)
+            continue
+        old = entry.get("node_id")
+        entry.update({
+            "node_id": new_node,
+            "previous_node_id": old,
+            "url": _url(new_node),
+            "title": title,
+            "last_synced_hash": lh,
+            "status": "synced_partial" if (failed or fatal) else "synced",
+            "synced_at": _now_iso(),
+        })
+        _save_state(state)
+        _emit(entry["status"], path=path, node_id=new_node, url=entry["url"],
+              previous_node_id=old, failed_count=failed, fatal_count=fatal)
+        if failed or fatal:
+            print(f"WARN [{path}] doc created but content may be incomplete; "
+                  f"open to verify and manually clean the old node.",
+                  file=sys.stderr)
+    return 0
+
+
+def cmd_list(_args: argparse.Namespace) -> int:
+    state = _load_state()
+    files = state.get("files", {})
+    rows = []
+    for path in files:
+        entry = files[path]
+        rows.append({
+            "path": path,
+            "status": entry.get("status", "uninitialized"),
+            "node_id": entry.get("node_id"),
+            "url": entry.get("url"),
+            "title": entry.get("title"),
+            "synced_at": entry.get("synced_at"),
+        })
+    print(json.dumps(rows, ensure_ascii=False))
+    for r in rows:
+        print(f"  {r['path']:40} {r['status']:14} {r['url'] or '-'}", file=sys.stderr)
+    return 0
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description="project-local multi-file library sync (generic)")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    pi = sub.add_parser("init", help="register a file's mapping as synced")
+    pi.add_argument("--path", required=True, help="local path relative to project root, e.g. docs/foo.md")
+    pi.add_argument("--node-id", required=True)
+    pi.add_argument("--url", default=None)
+    pi.add_argument("--title", default=None)
+    pi.set_defaults(func=cmd_init)
+
+    pc = sub.add_parser("check", help="offline-safe status check (no network)")
+    pc.add_argument("--path", default=None)
+    pc.set_defaults(func=cmd_check)
+
+    pp = sub.add_parser("push", help="re-publish if dirty and online (omit --path = all)")
+    pp.add_argument("--path", default=None)
+    pp.add_argument("--token-stdin", action="store_true",
+                    help="read token from stdin (exchanged via connect_open_platform)")
+    pp.add_argument("--title", default=None)
+    pp.add_argument("--force", action="store_true", help="ignore hash gate, force re-publish")
+    pp.set_defaults(func=cmd_push)
+
+    sub.add_parser("list", help="list all file mappings").set_defaults(func=cmd_list)
+
+    args = p.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

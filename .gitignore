@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Smoke / temp test artifacts
+_smoke/
+_smoke_prj/
+*.tmp
+
+# Editor / OS
+*.swp
+.DS_Store
+.vscode/
