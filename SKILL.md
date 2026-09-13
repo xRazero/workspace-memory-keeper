@@ -1,6 +1,11 @@
 ---
 name: workspace-memory-keeper
-description: "This skill should be used when writing or updating project memory files (.workbuddy/memory/MEMORY.md) or any agent memory/rule file, when memory approaches the injection budget, or when auditing memory hygiene. It enforces a layered memory architecture so the auto-injected memory stays a small, stable index while volatile detail lives in append-only daily logs and on-demand docs or knowledge base, preventing silent truncation and information loss. Budget-aware across platforms: WorkBuddy (3000/4000 chars), Claude Code (25KB or 200 lines), OpenAI Codex (64 KiB AGENTS.md), Windsurf (6000 chars/file, 12000 total), Cursor (no hard cap, soft <500 lines) — all verified 2026-09-13."
+version: 1.0.0
+display_name: 记忆防砍尾管家
+display_name_en: Workspace Memory Keeper
+description_zh: "解决 AI 记忆被平台静默砍尾：MEMORY.md 受注入预算限制（WorkBuddy 3000/4000 字符），超出即静默丢弃、无报错。本技能以分层索引 + 溢出 MOVE 不压缩（杜绝反复压缩丢信息）+ 预算自检 + 可选资料库同步规避，跨项目通用、安装零改动。内置五平台预算检查：WorkBuddy / Claude Code / OpenAI Codex / Windsurf / Cursor。"
+description_en: "Prevent silent truncation of auto-injected AI memory. Keeps MEMORY.md a small, stable index (WorkBuddy 3000/4000 chars; also covers Claude Code, OpenAI Codex, Windsurf and Cursor budget profiles), overflows via MOVE — never re-compress — into append-only daily logs and on-demand docs, with a bundled cross-platform budget checker. Cross-project, zero-config install."
+description: "This skill should be used when writing or updating project memory files (.workbuddy/memory/MEMORY.md) or any agent memory/rule file, when memory approaches the injection budget, or when auditing memory hygiene. It enforces a layered memory architecture so the auto-injected memory stays a small, stable index while volatile detail lives in append-only daily logs and on-demand docs or knowledge base, preventing silent truncation and information loss. Budget-aware across platforms: WorkBuddy (3000/4000 chars), Claude Code (25KB or 200 lines), OpenAI Codex (64 KiB AGENTS.md), Windsurf (6000 chars/file, 12000 total), Cursor (no hard cap, soft under 500 lines) — all verified 2026-09-13."
 agent_created: true
 ---
 
