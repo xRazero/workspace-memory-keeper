@@ -1,8 +1,11 @@
 # Workspace Memory Keeper
 
-> 一套「分层记忆」技能，让 WorkBuddy 的自动注入 `MEMORY.md` 永远只做小而稳的索引，
-> 彻底避免被 3000 / 4000 字符预算**静默砍尾丢信息**；溢出内容用 MOVE 而非就地压缩，
-> 杜绝反复压缩造成的信息损失。
+**解决 AI 记忆被平台静默砍尾：分层索引、溢出 MOVE 不压缩、预算自检、可选资料库同步。不只 WorkBuddy（3000/4000 字符），更内置 Claude Code（25KB/200行）、OpenAI Codex（64KiB）、Windsurf（6000/12000 字符）、Cursor（无硬上限·软<500行）五套预算 profile，跨项目、跨平台通用，安装零改动。**
+
+> 一套「分层记忆」技能，让 AI 助手的自动注入记忆永远只做小而稳的索引，
+> 彻底避免被注入预算**静默砍尾丢信息**；溢出内容用 MOVE 而非就地压缩，
+> 杜绝反复压缩造成的信息损失。WorkBuddy 之外，对 Claude / Codex / Windsurf /
+> Cursor 的记忆与规则文件同样适用。
 
 [English summary](#english-summary) · MIT License
 
@@ -40,6 +43,31 @@ WorkBuddy 在每次会话开始时，会把 `MEMORY.md` **自动注入**到上�
 
 ---
 
+## 跨平台预算支持
+
+「记忆被静默砍尾」不是 WorkBuddy 独有的问题——**每个 AI 编码平台都用有限预算注入记忆，只是数字和单位不同**。本技能的检查脚本内置五套 profile，同一套分层纪律通用于所有平台：
+
+| 平台 | 记忆 / 规则文件 | 计量单位 | 限额 | 超限静默砍尾？ |
+|---|---|---|---|---|
+| **WorkBuddy** | `MEMORY.md` | 字符(码点) | 工作区 3000 / 用户级 4000 | ✅ 是 |
+| **Claude Code** | `MEMORY.md` | 字节 **或** 行数 | 25 KB **或** 200 行（先到为准）；`CLAUDE.md` ≤ 4 MiB | ✅ 是 |
+| **OpenAI Codex** | `AGENTS.md` | 字节 | 64 KiB（当前；旧版 32 KiB） | ✅ 是 |
+| **Windsurf** | `.windsurfrules` | 字符 | 6000/文件，合计 ≤12000 | ✅ 是 |
+| **Cursor** | `.cursor/rules/*.mdc` | 行数 | 无硬上限；软建议 <500 行 | ❌（注意力衰减） |
+
+关键提醒：
+- **单位不可直接换算**：WorkBuddy 数「码点」、Claude/Codex 数「字节(UTF-8)」、Cursor 数「行数」。6000 字符 ≠ 6000 字节。
+- **Claude `MEMORY.md`** 是「25KB 与 200 行」任一触及即截断；`CLAUDE.md` 是另一套更大的预算（4 MiB）。
+- 修复手段在所有平台完全一致：**注入头部只做小索引，增长推向零预算渠道**（日志 / `docs/` / 资料库），溢出用 MOVE 而非压缩。
+
+切换平台只需一条 `--platform`：
+
+```bash
+python scripts/check_memory_budget.py --list            # 看全部 profile
+python scripts/check_memory_budget.py -p codex <项目>   # Codex 的字节预算
+python scripts/check_memory_budget.py -p claude <项目>  # 自动 glob ~/.claude/projects
+```
+
 ## 安装
 
 把本技能目录放到 WorkBuddy 的用户级技能目录即可：
@@ -70,10 +98,23 @@ git clone <your-repo> ~/.workbuddy/skills/workspace-memory-keeper
 ### 2. 检查预算（脚本，任意项目可用）
 
 ```bash
+# WorkBuddy（默认，向后兼容旧用法）
 python ~/.workbuddy/skills/workspace-memory-keeper/scripts/check_memory_budget.py <你的项目目录>
+
+# 列出全部平台 profile
+python ~/.workbuddy/skills/workspace-memory-keeper/scripts/check_memory_budget.py --list
+
+# 切换到其它平台（计量单位与限额自动匹配）
+python ~/.workbuddy/skills/workspace-memory-keeper/scripts/check_memory_budget.py -p codex   <项目目录>
+python ~/.workbuddy/skills/workspace-memory-keeper/scripts/check_memory_budget.py -p windsurf <项目目录>
+python ~/.workbuddy/skills/workspace-memory-keeper/scripts/check_memory_budget.py -p claude  <项目目录>
+python ~/.workbuddy/skills/workspace-memory-keeper/scripts/check_memory_budget.py -p cursor  <项目目录>
+
+# 直接检查某个文件（用 --limit 覆盖限额）
+python ~/.workbuddy/skills/workspace-memory-keeper/scripts/check_memory_budget.py -p codex --file ./AGENTS.md
 ```
 
-输出工作区与用户级 MEMORY.md 的字符数（Python `len()` 口径，非字节非 `wc -m`）及是否超出缓冲。
+输出记忆文件的计数（按平台对应口径：字符 / 字节 / 行数，非统一口径）及是否超出预算；超限且平台会静默砍尾时明确提示。
 
 ### 3. 新项目引导（bootstrap）
 
@@ -150,7 +191,7 @@ workspace-memory-keeper/
 ## 常见问题
 
 **Q: 3000/4000 能调大吗？**
-A: 不能（已核查平台无相关配置）。本技能是绕开：把增长推向零预算的日志/docs/资料库。
+A: WorkBuddy 不能（已核查平台无相关配置）。本技能是「绕开」：把增长推向零预算的日志/docs/资料库。如果是其它平台，运行 `check_memory_budget.py -p <平台>` 用该平台真实的预算口径（Claude 25KB/200行、Codex 64KiB、Windsurf 6000/12000 字符、Cursor 无硬上限）。
 
 **Q: 压缩 MEMORY.md 腾空间不行吗？**
 A: 不行。就地压缩会静默丢信息，且每次加细节都要重压，正是被本技能杜绝的丢信息路径。用 MOVE。
@@ -165,19 +206,22 @@ A: 纪律层（技能 + 用户级 MEMORY.md + 分层结构）天然跨项目；�
 
 ## English Summary
 
-**Problem:** WorkBuddy silently truncates the auto-injected `MEMORY.md` at ~3000 (workspace) /
-4000 (user) characters; the on-disk file can be far larger, so important memory is lost without
-warning. Re-compressing to save space drops information every time.
+**Problem:** Agent platforms silently truncate auto-injected memory at a finite budget —
+WorkBuddy ~3000/4000 chars, Claude Code 25 KB *or* 200 lines, OpenAI Codex 64 KiB, Windsurf
+6000/12000 chars, Cursor has no hard cap but attention decays past ~500 lines. The on-disk file
+can be far larger, so important memory is lost without warning. Re-compressing to save space drops
+information every time.
 
-**Solution — layered memory discipline:**
-- `MEMORY.md` stays a small, stable **index** (identity, pointers, red-lines, tiny sync status).
+**Solution — layered memory discipline (works on every platform):**
+- The injected memory head stays a small, stable **index** (identity, pointers, red-lines, tiny sync status).
 - Overflow goes to **budget-free** channels: append-only daily logs + `docs/*.md` + optional
   资料库 (Library) nodes. **MOVE, never compress.**
-- The 3000/4000 cap is a hard platform limit (no local config to raise it) — design around it.
+- Each platform's cap is a hard limit (no local config to raise it) — design around it.
 - On-demand retrieval is **relevance-first**: injected (P0) > workspace logs (P1) > project
   docs/library (P2) > cross-session search (P3).
 
-**Bundled:** a budget-check script, a generic project-local library-sync launcher template
+**Bundled:** a **platform-aware** budget-check script (`--platform` for WorkBuddy/Claude/Codex/
+Windsurf/Cursor, `--list` to preview), a generic project-local library-sync launcher template
 (`sync_memory.py`), and full rules/evidence reference. Installs with **zero changes** to your
 existing memory files; first-run appends an idempotent discipline note you may decline.
 

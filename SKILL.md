@@ -1,6 +1,6 @@
 ---
 name: workspace-memory-keeper
-description: "This skill should be used when writing or updating project memory files (.workbuddy/memory/MEMORY.md), when memory approaches the injection budget, or when auditing memory hygiene. It enforces a layered memory architecture so the auto-injected MEMORY.md stays a small, stable index (workspace up to 3000 chars / user up to 4000 chars) while volatile detail lives in append-only daily logs and on-demand docs or knowledge base, preventing silent truncation and information loss."
+description: "This skill should be used when writing or updating project memory files (.workbuddy/memory/MEMORY.md) or any agent memory/rule file, when memory approaches the injection budget, or when auditing memory hygiene. It enforces a layered memory architecture so the auto-injected memory stays a small, stable index while volatile detail lives in append-only daily logs and on-demand docs or knowledge base, preventing silent truncation and information loss. Budget-aware across platforms: WorkBuddy (3000/4000 chars), Claude Code (25KB or 200 lines), OpenAI Codex (64 KiB AGENTS.md), Windsurf (6000 chars/file, 12000 total), Cursor (no hard cap, soft <500 lines) — all verified 2026-09-13."
 agent_created: true
 ---
 
@@ -81,6 +81,40 @@ spec dumps, volatile task details, raw data, or anything that changes per task.
   (buffer under 3000); user-level ≤ 3800.
 - Use `scripts/check_memory_budget.py` to check any workspace quickly.
 
+## Cross-platform budget support (verified 2026-09-13)
+
+The "silent truncation" problem is **not unique to WorkBuddy** — every agent
+platform injects memory with a finite budget, only the number and the unit differ.
+This skill's checker is platform-aware so the same discipline applies everywhere:
+
+| Platform | File | Unit | Limit | Silent truncation? |
+|---|---|---|---|---|
+| **WorkBuddy** | `MEMORY.md` | chars | ws 3000 / user 4000 | ✅ |
+| **Claude Code** | `MEMORY.md` | bytes | 25 KB **OR** 200 lines (first wins); `CLAUDE.md` ≤ 4 MiB | ✅ |
+| **OpenAI Codex** | `AGENTS.md` | bytes | 64 KiB (current; 32 KiB older) | ✅ |
+| **Windsurf** | `.windsurfrules` | chars | 6000/file, 12000 total | ✅ |
+| **Cursor** | `.cursor/rules/*.mdc` | lines | no hard cap; soft <500 lines | ❌ (attention decays) |
+
+The underlying fix is identical on every platform: keep the **injected head** a
+small stable index; push growth to **budget-free** channels (daily logs, `docs/`,
+knowledge base). Only the budget number/unit changes.
+
+Run the checker against any platform:
+
+```bash
+python scripts/check_memory_budget.py --list                 # show all profiles
+python scripts/check_memory_budget.py <ws>                   # workbuddy (default, back-compat)
+python scripts/check_memory_budget.py -p codex <ws>          # Codex AGENTS.md (bytes)
+python scripts/check_memory_budget.py -p windsurf <ws>       # Windsurf (chars, 6000/12000)
+python scripts/check_memory_budget.py -p claude <ws>         # Claude MEMORY.md (glob ~/.claude/projects)
+python scripts/check_memory_budget.py -p cursor <ws>         # Cursor .mdc (lines, soft)
+python scripts/check_memory_budget.py -p codex --file ./AGENTS.md   # check one explicit file
+```
+
+When `--platform` is a non-WorkBuddy value, the layered *architecture* (index +
+MOVE overflow + budget-free channels) still applies; only the numeric budget and
+the file path differ. The overflow-handling rule in the next section is universal.
+
 ## Overflow handling — MOVE, do not compress (anti-loss rule)
 
 When MEMORY.md would exceed budget, **never compress in place** (that drops
@@ -142,9 +176,11 @@ Installing this skill copies `SKILL.md` (+ references/scripts/templates) into
 On first activation, the user is informed (6 points):
 
 1. **What it does**: enforces a layered memory discipline — the auto-injected
-   `MEMORY.md` stays a small stable index (workspace ≤3000 / user ≤4000 chars);
-   volatile or dated content overflows to daily logs and `docs/`/资料库, avoiding
-   silent truncation; overflow uses MOVE, never in-place compression.
+   `MEMORY.md` stays a small stable index (WorkBuddy: workspace ≤3000 / user ≤4000
+   chars; other platforms have their own budgets — see "Cross-platform budget
+   support"); volatile or dated content overflows to daily logs and `docs/`/资料库,
+   avoiding silent truncation; overflow uses MOVE, never in-place compression. The
+   same discipline transfers to Claude/Codex/Windsurf/Cursor memory files.
 2. **Hard limit is non-extensible**: 3000/4000 is a platform injection cap, not
    locally configurable; this skill works AROUND it, not through it.
 3. **Effect on user-level `MEMORY.md`**: zero change at install; first use may

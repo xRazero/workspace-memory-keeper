@@ -3,6 +3,34 @@
 Companion to `SKILL.md`. Evidence and patterns for the layered memory
 architecture.
 
+## 0. Cross-platform budget profiles (verified 2026-09-13)
+
+The "silent truncation" risk is **universal across agent platforms** — every
+platform injects memory with a finite budget; only the number and the unit
+differ. The `scripts/check_memory_budget.py` checker is platform-aware
+(`--platform` / `--list`). Use the same layered architecture everywhere; only the
+numeric budget and the file path change.
+
+| Platform | Memory / rule file | Unit | Hard limit | Silent truncation? | Source |
+|---|---|---|---|---|---|
+| **WorkBuddy** | `.workbuddy/memory/MEMORY.md` (ws) + `~/.workbuddy/MEMORY.md` (user) | chars (code points) | ws 3000 / user 4000 | ✅ yes | system prompt injection budget |
+| **Claude Code** | `~/.claude/projects/<hash>/memory/MEMORY.md` | bytes **OR** lines | 25 KB **or** 200 lines (first wins); `CLAUDE.md` ≤ 4 MiB | ✅ yes | Anthropic docs (memory) |
+| **OpenAI Codex** | `AGENTS.md` (+ `AGENTS.override.md`) | bytes | 64 KiB (current; older 32 KiB) via `project_doc_max_bytes` | ✅ yes | Codex config docs |
+| **Windsurf** | `.windsurfrules` (+ `.windsurf/rules/*.md`) | chars | 6000/file, **12000 total** | ✅ yes | Windsurf rules docs |
+| **Cursor** | `.cursor/rules/*.mdc` | lines | no hard cap; soft **<500 lines** (alwaysApply ≈ 2000–3000 tok) | ❌ no (attention decays) | Cursor rules guide 2026 |
+
+Notes:
+- **Units are not interchangeable**: WorkBuddy counts *code points* (Python
+  `len()`); Claude/Codex count *bytes* (UTF-8); Cursor counts *lines*. A 6000-char
+  Windsurf file ≠ a 6000-byte Codex file.
+- **Claude `MEMORY.md`** is truncated at *whichever* threshold hits first (25 KB
+  or 200 lines). `CLAUDE.md` is a separate, larger budget (4 MiB full load, skip
+  if larger).
+- **Codex** silently truncates beyond `project_doc_max_bytes`; the checker warns
+  at 60 KiB (buffer under 64 KiB).
+- The **overflow rule (MOVE, never compress)** in §4 applies identically on every
+  platform — only the head that must stay small changes.
+
 ## 1. Read / injection mechanism (verified 2026-09-13)
 
 ```
