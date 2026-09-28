@@ -1,5 +1,7 @@
 # Workspace Memory Keeper
 
+**当前版本 v1.1.0**（2026-09-28，变更见 [CHANGELOG.md](CHANGELOG.md)）
+
 **解决 AI 记忆被平台静默砍尾：分层索引、溢出 MOVE 不压缩、预算自检、可选资料库同步。不只 WorkBuddy（3000/4000 字符），更内置 Claude Code（25KB/200行）、OpenAI Codex（64KiB）、Windsurf（6000/12000 字符）、Cursor（无硬上限·软<500行）五套预算 profile，跨项目、跨平台通用，安装零改动。**
 
 > 一套「分层记忆」技能，让 AI 助手的自动注入记忆永远只做小而稳的索引，
@@ -119,9 +121,9 @@ python ~/.workbuddy/skills/workspace-memory-keeper/scripts/check_memory_budget.p
 ### 3. 新项目引导（bootstrap）
 
 首次在某项目激活技能时，技能会确保分层骨架存在（不静默覆盖你现有内容）：
-- 缺 `MEMORY.md` → 生成最小索引模板；已有但是大杂烩 → **提议重构**（MOVE+指针），不原地重写。
+- 缺 `MEMORY.md` → 生成最小索引模板；已有但是大杂烩 → **自动执行重构**（备份 → MOVE+指针 → 重跑校验），不询问、不原地重写、不压缩。（v1.1.0 起）
 - 项目要镜像 `docs/` 到资料库 → 从模板复制 `sync_memory.py` + 生成 `sync_state.json`，注册独立命名空间。
-- 用户级 MEMORY.md 缺纪律段 → 提议幂等追加（可拒）。
+- 用户级 MEMORY.md 缺纪律段 → 幂等追加（可拒，永不覆盖/删除现有内容）。
 
 ---
 

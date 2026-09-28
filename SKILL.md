@@ -1,6 +1,6 @@
 ---
 name: workspace-memory-keeper
-version: 1.0.0
+version: 1.1.0
 display_name: 记忆防砍尾管家
 display_name_en: Workspace Memory Keeper
 description_zh: "解决 AI 记忆被平台静默砍尾：MEMORY.md 受注入预算限制（WorkBuddy 3000/4000 字符），超出即静默丢弃、无报错。本技能以分层索引 + 溢出 MOVE 不压缩（杜绝反复压缩丢信息）+ 预算自检 + 可选资料库同步规避，跨项目通用、安装零改动。内置五平台预算检查：WorkBuddy / Claude Code / OpenAI Codex / Windsurf / Cursor。"
@@ -122,17 +122,31 @@ the file path differ. The overflow-handling rule in the next section is universa
 
 ## Overflow handling — MOVE, do not compress (anti-loss rule)
 
+**AUTO-EXECUTE — do not ask.** (User directive 2026-09-28: this was designed for
+exactly this case; asking "要不要我整理?" is a defect, not prudence.) The moment
+the checker reports `[OVER]`, run the refactor in the same turn. Permission is
+only needed for destructive/irreversible actions (deleting originals without
+backup, writing outside the memory dir, 资料库 upload).
+
 When MEMORY.md would exceed budget, **never compress in place** (that drops
 information). Instead:
 
+0. **Back up first**: `cp MEMORY.md <memory>/docs/_MEMORY_备份_<YYYY-MM-DD>.md`
+   (or `~/.workbuddy/memory-backups/` for user-level). Never lose the original.
 1. Identify the overflow content. If it is "what happened", append it to the
    dated daily log `YYYY-MM-DD.md` (append-only, no budget).
-2. If it is structured knowledge, move it to `docs/<topic>.md`; if the project
-   mirrors docs to a 资料库, run the project's sync script (e.g.
-   `.workbuddy/memory/sync_memory.py` with `check`/`push`/`init`).
+2. If it is structured knowledge, move it **verbatim** to `docs/<topic>.md`
+   (workspace layout used in practice: `<memory>/docs/<topic>.md`, plus a
+   `## 详细笔记` pointer table in MEMORY.md); if the project mirrors docs to a
+   资料库, run the project's sync script (e.g. `.workbuddy/memory/sync_memory.py`
+   with `check`/`push`/`init`).
 3. Leave a **one-line pointer** in MEMORY.md (the source-of-truth map).
+4. **Re-run the checker** and report before/after char counts. Target ≤2800
+   (workspace) / ≤3800 (user).
 
-This keeps MEMORY.md a stable index and pushes growth to budget-free channels.
+Expected result of a healthy refactor: MEMORY.md keeps only project identity,
+permanent red-lines, the pointer table and sync status (~1500-2000 chars); every
+fact survives in `docs/` or the daily log — zero information loss.
 
 ## Stability discipline
 
@@ -158,8 +172,9 @@ ensure the skeleton exists (do NOT silently overwrite existing content):
 
 1. If `<ws>/.workbuddy/memory/MEMORY.md` is absent → generate a minimal index
    template: project identity + directory, a source-of-truth pointer block, and a
-   red-lines placeholder. If it EXISTS but is a large blob, PROPOSE a refactor
-   (MOVE overflow to daily log / docs, keep a pointer) — do not rewrite in place.
+   red-lines placeholder. If it EXISTS but is a large blob → **auto-execute** the
+   refactor (back up → MOVE overflow to daily log / `docs/` → pointer table →
+   re-check), do not ask permission, do not rewrite in place, do not compress.
 2. If `<ws>/.workbuddy/memory/sync_state.json` is absent AND the project mirrors
    `docs/*.md` to a 资料库 → copy `templates/sync_memory.py.tmpl` to
    `<ws>/.workbuddy/memory/sync_memory.py` (single source; no per-project edits
@@ -192,8 +207,9 @@ On first activation, the user is informed (6 points):
    APPEND a discipline block (idempotent, never overwrites/deletes your content,
    capped at 4000). Already present → skipped. User may decline.
 4. **Effect on workspace `MEMORY.md`**: first use in a project ensures the layered
-   skeleton; if your existing `MEMORY.md` is a big blob, the skill PROPOSES a
-   refactor (MOVE + pointer), never a silent rewrite.
+   skeleton; if your existing `MEMORY.md` is a big blob, the skill **auto-executes**
+   the refactor in place (backup → MOVE + pointer → re-verify), never asking
+   permission and never silently rewriting.
 5. **资料库 / sync (optional)**: if the project mirrors `docs` to a 资料库, the
    skill generates a project-local `sync_memory.py` + `sync_state.json` and an
    independent namespace; needs 资料库 connect permission; each project keeps its
