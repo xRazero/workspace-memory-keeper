@@ -2,6 +2,22 @@
 
 All notable changes to `workspace-memory-keeper`. SemVer: MAJOR.MINOR.PATCH.
 
+## [1.1.1] — 2026-10-03
+
+### Added — marketplace (WorkBuddy 开放平台) readiness
+- `author: xRazero` and `category: 办公效率` added to SKILL.md frontmatter — the
+  two fields the 开放平台 upload parser requires beyond the 1.1.0 set. The full
+  required set is now present: `name / display_name / display_name_en /
+  description / description_zh / description_en / category / version / author`.
+- `assets/icon.png` — 512×512 PNG marketplace avatar (≤500 KB), generated
+  programmatically (no external assets).
+- YAML frontmatter re-validated with a real parser (PyYAML safe_load) to rule out
+  the well-known "colon without a space / Chinese quotes" upload failures.
+
+### Note
+No functional change to the skill logic — this release only makes the packaged
+skill submittable to the official WorkBuddy marketplace (open.workbuddy.cn).
+
 ## [1.1.0] — 2026-09-28
 
 ### Added
