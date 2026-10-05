@@ -2,6 +2,43 @@
 
 All notable changes to `workspace-memory-keeper`. SemVer: MAJOR.MINOR.PATCH.
 
+## [1.2.0] — 2026-10-05 — "a SKILL.md is not enforcement"
+
+Trigger: the rules in this skill were correct, yet a project MEMORY.md still
+grew to 4213 chars and was silently truncated. Three independent gaps found and
+closed.
+
+### Added
+- **`scripts/hook_memory_guard.py`** — the first *enforcement* mechanism.
+  Registered on `PreToolUse` + `PostToolUse` (matcher `Write|Edit`):
+  - PreToolUse: write that would exceed the hard cap → `permissionDecision: deny`
+    with a MOVE-not-compress instruction (Write measured exactly, Edit estimated
+    from the old/new delta).
+  - PostToolUse: re-reads the real file and warns at the soft watermark, so
+    overflow gets MOVEd out *before* the cap is hit.
+  - Fail-safe: any exception exits 0 with `continue: true`. Only MEMORY.md paths
+    are inspected; everything else is a no-op.
+- **`scripts/install_hooks.py`** — idempotent installer: `--status`, `--uninstall`,
+  default install. Merges into `~/.workbuddy/settings.json` (never overwrites),
+  backs up before every write, and reports any key lost during the merge.
+- Soft watermarks: workspace warn 2400 / hard 3000; user warn 3200 / hard 4000.
+  Rationale: running memory up against the cap is exactly how it truncates again.
+
+### Fixed
+- **`check_memory_budget.py --file` was a silent no-op.** It labelled every
+  explicit file by `os.path.basename()` (`MEMORY.md`), which never matches the
+  prefixed profile keys (`workspace MEMORY.md`, `user      MEMORY.md`), so it
+  fell through to the `10**9` "no known cap" branch and printed `[OK]` for any
+  size. New `_classify_file_label()` maps paths onto labels, including the real
+  user-level layout `~/.workbuddy/user-<hash>-personal/MEMORY.md` (the
+  `~/.workbuddy/MEMORY.md` shape alone was not enough).
+- `SKILL.md` budget guidance tightened from "≤2800 / ≤3800" to the watermark
+  values "≤2400 / ≤3200", and a new section documents why hooks are required.
+
+### Note
+Hooks take effect only after restarting the process or starting a new session
+(`/clear`); editing `settings.json` mid-session does not apply.
+
 ## [1.1.1] — 2026-10-03
 
 ### Added — marketplace (WorkBuddy 开放平台) readiness

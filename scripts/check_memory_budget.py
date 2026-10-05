@@ -185,6 +185,42 @@ def report(profile, label, path, limit, warn):
     return n
 
 
+def _classify_file_label(path, profile):
+    """Map an arbitrary --file path onto a profile limit label.
+
+    Bug fixed 2026-10-05: previously --file used only the basename ("MEMORY.md"),
+    which never matched prefixed labels like "workspace MEMORY.md" /
+    "user      MEMORY.md", silently falling through to the 10**9 no-cap branch.
+    Result: every `--file` check reported OK regardless of real size.
+    """
+    p = os.path.normpath(os.path.expanduser(path)).replace("\\", "/")
+    low = p.lower()
+    base = os.path.basename(p)
+    keys = [k for k in profile["limits"] if not k.startswith("_")]
+
+    if base in keys:
+        return base
+
+    norm = {k.strip().lower(): k for k in keys}
+    if low.endswith("/.workbuddy/memory/memory.md") or low.endswith("/.codebuddy/memory/memory.md"):
+        for k in norm.values():
+            if k.strip().lower().startswith("workspace"):
+                return k
+    # user-level lives at ~/.workbuddy/MEMORY.md and also at
+    # ~/.workbuddy/user-<hash>-personal/MEMORY.md (real layout, 2026-10-05).
+    if low.endswith("memory.md") and (
+        "/.workbuddy/" in low or "/.claude/" in low or "/.codebuddy/" in low
+    ):
+        for k in norm.values():
+            if k.strip().lower().startswith("user"):
+                return k
+    if low.endswith("/.workbuddy/memory.md") or low.endswith("/.claude/memory.md"):
+        for k in norm.values():
+            if k.strip().lower().startswith("user"):
+                return k
+    return base
+
+
 def cmd_list():
     print("=== Platform budget profiles ===")
     for name, p in PROFILES.items():
@@ -226,7 +262,7 @@ def main():
     targets = []
     if args.file:
         for fp in args.file:
-            lbl = os.path.basename(fp)
+            lbl = _classify_file_label(fp, prof)
             if args.limit is not None:
                 hard = warn = args.limit
             elif lbl in prof["limits"]:

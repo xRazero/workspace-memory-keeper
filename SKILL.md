@@ -1,6 +1,6 @@
 ---
 name: workspace-memory-keeper
-version: 1.1.1
+version: 1.2.0
 display_name: 记忆防砍尾管家
 display_name_en: Workspace Memory Keeper
 description_zh: "解决 AI 记忆被平台静默砍尾：MEMORY.md 受注入预算限制（WorkBuddy 3000/4000 字符），超出即静默丢弃、无报错。本技能以分层索引 + 溢出 MOVE 不压缩（杜绝反复压缩丢信息）+ 预算自检 + 可选资料库同步规避，跨项目通用、安装零改动。内置五平台预算检查：WorkBuddy / Claude Code / OpenAI Codex / Windsurf / Cursor。"
@@ -80,13 +80,52 @@ Do not try to expand the budget. Design around it.
 NEVER put in MEMORY.md: dated changelog lines ("2026-09-13 did X"), E1–E9-style
 spec dumps, volatile task details, raw data, or anything that changes per task.
 
+## Enforcement: hooks — a SKILL.md alone is NOT enforcement
+
+**Lesson learned 2026-10-05 (do not repeat).** This skill's rules were correct
+and still failed: a project MEMORY.md was written to 4213 chars and silently
+truncated. Three independent gaps, all now closed:
+
+| Gap | Why it failed | Fix |
+|---|---|---|
+| Skill is passive | A SKILL.md only applies when the model *happens to load it*. Mid-task (fixing an unrelated bug) it is never loaded, so the rule never runs. | Register a **hook** — hooks fire on every tool call and cannot be forgotten. |
+| No hook was installed | `~/.workbuddy/settings.json` had no `hooks` key at all. | `scripts/hook_memory_guard.py` + `scripts/install_hooks.py` (idempotent, backs up, never loses keys). |
+| Checker silently no-op'd | `--file` used only `os.path.basename()`, which never matched prefixed labels (`workspace MEMORY.md`), so it fell through to the `10**9` no-cap branch → **reported OK for any size**. | `_classify_file_label()` now maps paths onto labels, incl. the real user layout `.workbuddy/user-<hash>-personal/MEMORY.md`. |
+
+Guard behaviour (`hook_memory_guard.py`, fail-safe — any exception exits 0
+with `continue: true`):
+
+- **PreToolUse** (`Write|Edit`): over the hard cap → `permissionDecision: deny`
+  with a MOVE-not-compress instruction. `Write` is measured exactly; `Edit` is
+  estimated from the old/new delta.
+- **PostToolUse**: re-reads the real file; warns at the soft watermark so
+  overflow is MOVEd out *before* the cap is reached.
+- Non-MEMORY.md paths are a no-op.
+
+Install / inspect / remove:
+
+```bash
+python scripts/install_hooks.py            # install (merges, keeps other keys)
+python scripts/install_hooks.py --status   # report only
+python scripts/install_hooks.py --uninstall
+```
+
+**Hooks take effect only after restarting the process or starting a new
+session** (`/clear`). Editing `settings.json` mid-session does not apply.
+
+**Watermark, not cap.** Do not run memory right up against 3000/4000 — that is
+how it silently truncates again. Guard thresholds: workspace hard 3000 /
+warn 2400; user hard 4000 / warn 3200. Treat a warning as "MOVE now".
+
 ## Budget control
 
 - Measure with **Python `len()` (Unicode code points), NOT bytes, NOT `wc -m`.**
   `wc -m` can over-count combining characters in some environments; the platform's
-  injection budget uses code-point count. Keep workspace MEMORY.md ≤ 2800 chars
-  (buffer under 3000); user-level ≤ 3800.
+  injection budget uses code-point count. Keep workspace MEMORY.md ≤ 2400 chars
+  (watermark under 3000); user-level ≤ 3200.
 - Use `scripts/check_memory_budget.py` to check any workspace quickly.
+  Pass a workspace dir, or `--file PATH ...` (path→label mapping fixed 2026-10-05;
+  before that fix `--file` always reported OK).
 
 ## Cross-platform budget support (verified 2026-09-13)
 
